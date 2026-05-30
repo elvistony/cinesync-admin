@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CineSync Remote</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    
+    <style>
+        :root {
+            --cine-bg: #0A0A0C;
+            --cine-orange: #FF9100;
+            --cine-card: #1C1C1E;
+            --cine-text: #FFFFFF;
+            --cine-muted: #9E9E9E;
+        }
+        
+        body, html {
+            background-color: var(--cine-bg);
+            color: var(--cine-text);
+            height: 100%;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            /* Prevent pull-to-refresh and selection on mobile */
+            overscroll-behavior-y: contain;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Full Screen Containers */
+        .screen {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            padding: 24px;
+            transition: opacity 0.3s ease;
+        }
+
+        #remoteScreen {
+            display: none;
+            opacity: 0;
+        }
+
+        /* Join Screen Styling */
+        .join-container {
+            margin: auto;
+            width: 100%;
+            max-width: 400px;
+            background: var(--cine-card);
+            padding: 32px;
+            border-radius: 24px;
+            text-align: center;
+        }
+
+        .cine-input {
+            background-color: #2C2C2E;
+            border: 2px solid transparent;
+            color: white;
+            font-size: 1.5rem;
+            text-align: center;
+            letter-spacing: 4px;
+            border-radius: 12px;
+        }
+        .cine-input:focus {
+            background-color: #3A3A3C;
+            border-color: var(--cine-orange);
+            color: white;
+            box-shadow: none;
+        }
+
+        /* Remote UI Styling */
+        .header {
+            text-align: center;
+            margin-top: 20px;
+            margin-bottom: 40px;
+        }
+
+        .now-playing-label {
+            color: var(--cine-orange);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }
+
+        .movie-title {
+            font-size: 1.8rem;
+            font-weight: 800;
+            margin-bottom: 4px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        /* Big Transport Controls */
+        .transport-grid {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 24px;
+            margin: auto 0;
+        }
+
+        .btn-round {
+            background: var(--cine-card);
+            border: none;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            transition: transform 0.1s, background 0.2s;
+            cursor: pointer;
+        }
+        
+        .btn-round:active {
+            transform: scale(0.92);
+            background: #2C2C2E;
+        }
+
+        .btn-secondary {
+            width: 70px;
+            height: 70px;
+            font-size: 1.8rem;
+        }
+
+        .btn-primary-action {
+            width: 100px;
+            height: 100px;
+            font-size: 3rem;
+            background: white;
+            color: var(--cine-bg);
+        }
+        
+        .btn-primary-action:active {
+            background: #E0E0E0;
+            transform: scale(0.95);
+        }
+
+        /* Bottom Utility Bar */
+        .utility-bar {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-top: auto;
+            margin-bottom: 20px;
+        }
+
+        .btn-utility {
+            background: var(--cine-card);
+            color: var(--cine-text);
+            border: none;
+            padding: 16px;
+            border-radius: 16px;
+            font-weight: 600;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-utility i {
+            font-size: 1.5rem;
+            color: var(--cine-muted);
+        }
+
+        .btn-utility:active {
+            background: #2C2C2E;
+        }
+
+        /* Status Pill */
+        .status-pill {
+            position: absolute;
+            top: 24px;
+            right: 24px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 6px 12px;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #FF3B30;
+            border-radius: 50%;
+        }
+        .status-dot.connected {
+            background-color: #34C759;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="joinScreen" class="screen">
+        <div class="join-container">
+            <h1 style="color: var(--cine-orange); font-weight: 900;">CineSync</h1>
+            <p class="text-muted mb-4">Enter the Room PIN to connect</p>
+            
+            <input type="text" id="roomIdInput" class="form-control cine-input mb-4" placeholder="PIN" maxlength="6" inputmode="numeric">
+            
+            <button id="btnConnect" class="btn w-100 py-3" style="background: var(--cine-orange); color: var(--cine-bg); font-weight: bold; border-radius: 12px;">
+                Connect Remote
+            </button>
+        </div>
+    </div>
+
+    <div id="remoteScreen" class="screen">
+        
+        <div class="status-pill">
+            <div id="connectionDot" class="status-dot"></div>
+            <span id="connectionText">Connecting...</span>
+        </div>
+
+        <div class="header">
+            <div class="now-playing-label">Now Playing</div>
+            <div id="movieTitle" class="movie-title">Waiting for Media...</div>
+            <div id="roomIdDisplay" class="text-muted small">Room: ---</div>
+        </div>
+
+        <div class="transport-grid">
+            <button class="btn-round btn-secondary" id="btnRewind">
+                <i class="bi bi-arrow-counterclockwise"></i>
+            </button>
+            
+            <button class="btn-round btn-primary-action" id="btnPlayPause">
+                <i id="playPauseIcon" class="bi bi-play-fill"></i>
+            </button>
+            
+            <button class="btn-round btn-secondary" id="btnSkip">
+                <i class="bi bi-arrow-clockwise"></i>
+            </button>
+        </div>
+
+        <div class="utility-bar">
+            <button class="btn-utility" id="btnRestart">
+                <i class="bi bi-film"></i>
+                Start Stream
+            </button>
+            <button class="btn-utility" id="btnForceSync">
+                <i class="bi bi-arrow-repeat" style="color: var(--cine-orange);"></i>
+                Force Sync
+            </button>
+        </div>
+    </div>
+
+<script>
+    const SOCKET_URL = "https://socket.elvistony.dev"; 
+    let socket = null;
+    let currentRoom = "";
+    let isPlaying = false;
+
+    // UI Elements
+    const joinScreen = document.getElementById('joinScreen');
+    const remoteScreen = document.getElementById('remoteScreen');
+    const roomIdInput = document.getElementById('roomIdInput');
+    const movieTitle = document.getElementById('movieTitle');
+    const roomIdDisplay = document.getElementById('roomIdDisplay');
+    const playPauseIcon = document.getElementById('playPauseIcon');
+    const connectionDot = document.getElementById('connectionDot');
+    const connectionText = document.getElementById('connectionText');
+
+    // ---------------------------------------------------------
+    // 1. AUTO-CONNECT VIA QR CODE HASH
+    // ---------------------------------------------------------
+    window.addEventListener('DOMContentLoaded', () => {
+        // Look for URL hash like #123456
+        const hash = window.location.hash.substring(1);
+        if (hash && hash.length > 0) {
+            roomIdInput.value = hash;
+            initConnection(hash);
+        }
+    });
+
+    document.getElementById('btnConnect').addEventListener('click', () => {
+        const roomId = roomIdInput.value.trim();
+        if (roomId) initConnection(roomId);
+    });
+
+    // ---------------------------------------------------------
+    // 2. SOCKET CONNECTION LOGIC
+    // ---------------------------------------------------------
+    function initConnection(roomId) {
+        currentRoom = roomId;
+        roomIdDisplay.innerText = `Room: #${roomId}`;
+        
+        // UI Transition
+        joinScreen.style.opacity = 0;
+        setTimeout(() => {
+            joinScreen.style.display = 'none';
+            remoteScreen.style.display = 'flex';
+            setTimeout(() => remoteScreen.style.opacity = 1, 50);
+        }, 300);
+
+        // Socket Setup
+        if(socket) socket.disconnect();
+        socket = io(SOCKET_URL);
+
+        socket.on('connect', () => {
+            connectionDot.classList.add('connected');
+            connectionText.innerText = "Connected";
+            socket.emit('join', currentRoom);
+        });
+
+        socket.on('disconnect', () => {
+            connectionDot.classList.remove('connected');
+            connectionText.innerText = "Disconnected";
+            setPlayState(false);
+        });
+
+        // Hydrate UI if media is already loaded in the room
+        socket.on('welcome', (data) => {
+            if (data.msg && data.msg.context) {
+                movieTitle.innerText = data.msg.context.title || "Unknown Media";
+            }
+        });
+
+        socket.on('context', (data) => {
+            if (data.context) {
+                movieTitle.innerText = data.context.title || "Unknown Media";
+            }
+        });
+
+        // Listen for remote events to keep the Play/Pause icon accurate
+        socket.on('message', (data) => {
+            const msgType = data.msg?.type;
+            if (msgType === 'play' || msgType === 'stream') {
+                setPlayState(true);
+            } else if (msgType === 'pause') {
+                setPlayState(false);
+            }
+        });
+    }
+
+    // ---------------------------------------------------------
+    // 3. UI STATE MANAGERS
+    // ---------------------------------------------------------
+    function setPlayState(playing) {
+        isPlaying = playing;
+        if (playing) {
+            playPauseIcon.classList.remove('bi-play-fill');
+            playPauseIcon.classList.add('bi-pause-fill');
+        } else {
+            playPauseIcon.classList.remove('bi-pause-fill');
+            playPauseIcon.classList.add('bi-play-fill');
+        }
+    }
+
+    function emitCommand(type, payload = null) {
+        if(!socket || !socket.connected) return;
+        
+        // Haptic feedback if supported by the mobile browser
+        if (navigator.vibrate) navigator.vibrate(50);
+        
+        socket.emit('message', { 
+            room: currentRoom, 
+            msg: { type: type, payload: payload } 
+        });
+    }
+
+    // ---------------------------------------------------------
+    // 4. BUTTON LISTENERS
+    // ---------------------------------------------------------
+    document.getElementById('btnPlayPause').addEventListener('click', () => {
+        if (isPlaying) {
+            emitCommand('pause');
+            setPlayState(false);
+        } else {
+            emitCommand('play');
+            setPlayState(true);
+        }
+    });
+
+    document.getElementById('btnRewind').addEventListener('click', () => {
+        // A mobile remote can't read the exact current time easily without pinging the admin.
+        // We tell the TVs to handle the math locally if they support relative seeking, 
+        // but since our socket payload expects absolute seconds, we rely on the Ktor/ExoPlayer 
+        // to handle native "Rewind 10s" logic if we send a generic skip command.
+        // For absolute safety with current architecture, we emit a pause, then let the TV handle its own native seek if configured.
+        alert("Mobile scrub sync coming soon. Please use TV remote for precise scrubbing.");
+    });
+
+    document.getElementById('btnSkip').addEventListener('click', () => {
+        alert("Mobile scrub sync coming soon. Please use TV remote for precise scrubbing.");
+    });
+
+    document.getElementById('btnRestart').addEventListener('click', () => {
+        if(confirm("Restart movie from the beginning?")) {
+            emitCommand('stream');
+            setPlayState(true);
+        }
+    });
+
+    document.getElementById('btnForceSync').addEventListener('click', () => {
+        // Without an internal player, the remote can't send an absolute timestamp to force sync to.
+        // Instead, it sends a generic pause command to freeze the room and let buffers catch up.
+        emitCommand('pause');
+        setPlayState(false);
+        alert("Room paused. Wait a moment for buffers to catch up, then press Play.");
+    });
+
+</script>
+</body>
+</html>

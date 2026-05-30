@@ -69,7 +69,7 @@
         }
         .plyr { width: 100%; height: 100%; max-height: 100vh; }
         
-        /* Form controls */
+        /* Netflix-style input */
         .cine-input {
             background-color: #333;
             border: 1px solid #444;
@@ -100,7 +100,7 @@
 <div id="wizardScreen">
     <div class="text-center mb-4">
         <h1 class="fw-black" style="color: var(--cine-orange); font-weight: 900;">CineSync TV</h1>
-        <p class="text-muted">Web Client</p>
+        <p class="text-muted">Web Client 1.0</p>
     </div>
     <div class="wizard-card">
         <h5 class="mb-3 text-white fw-bold text-center">Join a Watch Party</h5>
@@ -120,7 +120,7 @@
     </div>
     
     <div class="plyr-container">
-        <video id="clientPlayer" playsinline crossorigin="anonymous" preload="auto"></video>
+        <video id="clientPlayer" playsinline></video>
     </div>
 </div>
 
@@ -152,14 +152,6 @@
         const roomId = document.getElementById('roomIdInput').value.trim();
         if(!roomId) return alert("Please enter a Room ID");
 
-        // FIX: iOS User Interaction Token Emulation
-        // Force an execution thread on the media element using a dummy track configuration
-        // to register the user touch token before web sockets take over layout commands.
-        player.source = { type: 'video', sources: [{ src: '', type: 'video/mp4' }] };
-        player.play().catch(() => {}).finally(() => {
-            player.pause();
-        });
-
         currentRoom = roomId;
         socket = io(SOCKET_URL);
 
@@ -178,7 +170,7 @@
         });
 
         socket.on('welcome', (data) => {
-            if (data.msg && data.msg.context && typeof data.msg.context === 'object') {
+            if (data.msg.context && typeof data.msg.context === 'object') {
                 loadMedia(data.msg.context);
             }
         });
@@ -193,7 +185,7 @@
     });
 
     // ---------------------------------------------------------
-    // 2. MEDIA LOADING LOGIC (FIXED FOR PLYR + SAFARI INTEROP)
+    // 2. MEDIA LOADING LOGIC (HLS / MP4)
     // ---------------------------------------------------------
     function loadMedia(context) {
         document.getElementById('movieTitleDisplay').innerText = context.title || "Unknown Title";
@@ -202,68 +194,44 @@
         const url = context.url;
         if (!url) return;
 
-        // Reset existing engine instances
         if(hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
         
         if (url.includes('.m3u8')) {
             if (Hls.isSupported()) {
-                // PC / Android / Modern iPad engine layer
-                hlsInstance = new Hls({ maxBufferLength: 30 });
+                hlsInstance = new Hls();
                 hlsInstance.loadSource(url);
                 hlsInstance.attachMedia(videoElement);
-                hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
-                    if(socket) socket.emit('message', { room: currentRoom, msg: { type: 'progress', payload: 100 } });
-                });
             } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
-                // FIXED FOR iOS: Use Plyr's official source assignment method.
-                // Changing videoElement.src directly causes Plyr to break context routing on iOS.
-                player.source = {
-                    type: 'video',
-                    title: context.title || "Stream",
-                    sources: [{ src: url, type: 'application/x-mpegURL' }]
-                };
-                // Force engine pipeline processing
-                videoElement.load(); 
+                videoElement.src = url;
             }
         } else {
-            // Standard progressive MP4 delivery via Plyr API
-            player.source = {
-                type: 'video',
-                title: context.title || "Video",
-                sources: [{ src: url, type: 'video/mp4' }]
-            };
-            videoElement.load();
+            videoElement.src = url;
         }
 
-        // Catch fallback metadata loads for native tracks
         videoElement.addEventListener('loadedmetadata', () => {
-            if(socket) {
-                socket.emit('message', { room: currentRoom, msg: { type: 'progress', payload: 100 } });
-            }
+            if(socket) socket.emit('message', { room: currentRoom, msg: { type: 'progress', payload: 100 } });
         }, { once: true });
     }
 
     // ---------------------------------------------------------
-    // 3. NETWORK MESSAGE HANDLING (Listening to Admin)
+    // 3. NETWORK MESSAGE HANDLING
     // ---------------------------------------------------------
     function handleNetworkMessage(data) {
         const senderId = data.from;
         const msgType = data.msg?.type;
         
-        if (senderId === socket.id || senderId === 'system') return;
+        if (senderId === socket.id) return;
 
+        // NEW LOGIC: Seek and Stream explicitly halt playback for buffering
         if (msgType === 'stream') {
             isNetworkEvent = true;
             player.currentTime = 0;
-            // Force stream cache refresh for Apple clients
-            player.play().catch(()=>{}).finally(() => {
-                player.pause();
-                setTimeout(() => isNetworkEvent = false, 100);
-            });
+            player.pause(); 
+            setTimeout(() => isNetworkEvent = false, 100);
         } 
         else if (msgType === 'play') {
             isNetworkEvent = true;
-            player.play().catch(e => console.log("Autoplay context initialization block:", e)).finally(() => isNetworkEvent = false);
+            player.play().catch(e => console.log("Autoplay blocked by browser:", e)).finally(() => isNetworkEvent = false);
         } 
         else if (msgType === 'pause') {
             isNetworkEvent = true;
@@ -275,14 +243,14 @@
             const seekTo = parseInt(data.msg.payload);
             if(!isNaN(seekTo)) {
                 player.currentTime = seekTo;
-                player.pause(); 
+                player.pause(); // Halt playback to buffer
             }
             setTimeout(() => isNetworkEvent = false, 100);
         }
     }
 
     // ---------------------------------------------------------
-    // 4. CLIENT STATUS REPORTING (Talking to Admin)
+    // 4. CLIENT STATUS REPORTING
     // ---------------------------------------------------------
     function emitCommand(type, cmdPayload = null) {
         if(!socket || !socket.connected || isNetworkEvent) return;
@@ -292,6 +260,7 @@
     player.on('play', () => emitCommand('play'));
     player.on('pause', () => emitCommand('pause'));
     
+    // NEW: Stop playback immediately after scrubbing to allow buffering
     player.on('seeked', () => { 
         if (!isNetworkEvent) {
             isNetworkEvent = true;
@@ -315,7 +284,6 @@
         }
     });
 
-    // Sync Heartbeat Loop (Every 5 seconds)
     setInterval(() => {
         if(socket && socket.connected && player.playing && player.duration) {
             socket.emit('message', { room: currentRoom, msg: { type: 'progress', payload: 100 } });
